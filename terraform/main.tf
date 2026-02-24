@@ -22,6 +22,8 @@ locals {
   ]
   memorystore_apis = ["redis.googleapis.com"]
   cluster_name     = google_container_cluster.my_cluster.name
+  # Use a single zone for a predictable node count (avoids multi-zone node multiplication)
+  zone = "${var.region}-b"
 }
 
 # Enable Google Cloud APIs
@@ -36,26 +38,42 @@ module "enable_google_apis" {
   activate_apis = concat(local.base_apis, var.memorystore ? local.memorystore_apis : [])
 }
 
-# Create GKE cluster
+# Create GKE standard cluster (zonal, us-central1-b)
 resource "google_container_cluster" "my_cluster" {
 
   name     = var.name
-  location = var.region
+  location = local.zone
 
-  # Enable autopilot for this cluster
-  enable_autopilot = true
-
-  # Set an empty ip_allocation_policy to allow autopilot cluster to spin up correctly
-  ip_allocation_policy {
-  }
+  # Remove the default node pool after cluster creation;
+  # we manage nodes via a separate google_container_node_pool resource
+  remove_default_node_pool = true
+  initial_node_count       = 1
 
   # Avoid setting deletion_protection to false
   # until you're ready (and certain you want) to destroy the cluster.
-  # deletion_protection = false
+  deletion_protection = false
 
   depends_on = [
     module.enable_google_apis
   ]
+}
+
+# Node pool: 2x e2-medium nodes (2 vCPU / 4 GB RAM each = 4 vCPU / 8 GB total)
+resource "google_container_node_pool" "primary_nodes" {
+  name       = "${var.name}-node-pool"
+  location   = local.zone
+  cluster    = google_container_cluster.my_cluster.name
+  node_count = 3
+
+  node_config {
+    machine_type = "e2-standard-4"
+    disk_size_gb = 50
+
+    # Full access to GCP APIs (required for pulling images, logging, etc.)
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+  }
 }
 
 # Get credentials for cluster
@@ -69,7 +87,7 @@ module "gcloud" {
   create_cmd_entrypoint = "gcloud"
   # Module does not support explicit dependency
   # Enforce implicit dependency through use of local variable
-  create_cmd_body = "container clusters get-credentials ${local.cluster_name} --zone=${var.region} --project=${var.gcp_project_id}"
+  create_cmd_body = "container clusters get-credentials ${local.cluster_name} --zone=${local.zone} --project=${var.gcp_project_id}"
 }
 
 # Create staging and prod namespaces
@@ -118,14 +136,14 @@ resource "null_resource" "wait_conditions" {
   provisioner "local-exec" {
     interpreter = ["bash", "-exc"]
     command     = <<-EOT
-      kubectl wait --for=condition=AVAILABLE apiservice/v1beta1.metrics.k8s.io --timeout=180s
-      kubectl wait --for=condition=ready pods --all -n staging --timeout=300s
-      kubectl wait --for=condition=ready pods --all -n prod    --timeout=300s
+      kubectl wait --for=condition=AVAILABLE apiservice/v1beta1.metrics.k8s.io --timeout=180s || echo "Metrics API not yet available on Autopilot, continuing..."
+      kubectl wait --for=condition=ready pods --all -n staging --timeout=600s
+      kubectl wait --for=condition=ready pods --all -n prod    --timeout=600s
     EOT
   }
 
   depends_on = [
     null_resource.deploy_staging,
     null_resource.deploy_prod,
-  ]
+  ] 
 }

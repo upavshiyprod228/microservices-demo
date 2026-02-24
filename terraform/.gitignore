@@ -1,0 +1,6 @@
+cat >> /mnt/c/Project/microservices-demo/terraform/.gitignore << EOF
+.terraform/
+*.tfstate
+*.tfstate.backup
+github-actions-key.json
+EOF
