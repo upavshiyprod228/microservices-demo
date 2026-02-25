@@ -58,7 +58,7 @@ resource "google_container_cluster" "my_cluster" {
   ]
 }
 
-# Node pool: 2x e2-medium nodes (2 vCPU / 4 GB RAM each = 4 vCPU / 8 GB total)
+# Node pool: 3x e2-standard-4 nodes (4 vCPU / 16 GB RAM each = 12 vCPU / 48 GB total)
 resource "google_container_node_pool" "primary_nodes" {
   name       = "${var.name}-node-pool"
   location   = local.zone
